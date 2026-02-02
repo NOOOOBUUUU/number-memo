@@ -16,7 +16,6 @@
     margin: 8px 0;
   }
 
-  /* タブ */
   .tabs {
     display: flex;
     justify-content: center;
@@ -36,7 +35,6 @@
     color: #fff;
   }
 
-  /* 記録欄 */
   .display {
     width: 100%;
     box-sizing: border-box;
@@ -49,7 +47,6 @@
     word-break: break-all;
   }
 
-  /* ボタンエリア */
   .grid {
     display: grid;
     grid-template-columns: repeat(10, 1fr);
@@ -170,17 +167,36 @@
     });
   }
 
+  // ★ 改良された改行ルール
   function renderLog() {
     const lines = [];
-    log.forEach((item, i) => {
+    let currentLine = [];
+    let lastTab = null;
+
+    log.forEach((item, index) => {
       const text = item.count === 1
         ? `${item.tab}${item.num}`
         : `${item.tab}${item.num}(${item.count})`;
 
-      const lineIndex = Math.floor(i / 10);
-      if (!lines[lineIndex]) lines[lineIndex] = [];
-      lines[lineIndex].push(text);
+      // タブが変わったら改行
+      if (lastTab && item.tab !== lastTab) {
+        lines.push(currentLine);
+        currentLine = [];
+      }
+
+      // 10項目ごとでも改行
+      if (currentLine.length === 10) {
+        lines.push(currentLine);
+        currentLine = [];
+      }
+
+      currentLine.push(text);
+      lastTab = item.tab;
     });
+
+    if (currentLine.length) {
+      lines.push(currentLine);
+    }
 
     displayEl.textContent = lines.map(l => l.join(", ")).join("\n");
   }

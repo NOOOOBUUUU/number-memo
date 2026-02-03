@@ -2,212 +2,218 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>記録付きボタン</title>
+<title>番号記録ツール</title>
+
 <style>
-html, body {
+:root {
+  --scale: 1;
+}
+
+body {
   margin: 0;
-  padding: 0;
-  width: 100%;
-  font-family: sans-serif;
-}
-
-:root { --base-font: 16px; }
-body { font-size: var(--base-font); }
-
-.container { width: 100%; }
-
-.record {
-  width: 100%;
-  min-height: 10em;
-  border: 1px solid #333;
   padding: 8px;
-  box-sizing: border-box;
-  white-space: pre-wrap;
-  word-break: break-all;
+  font-family: sans-serif;
+  font-size: calc(16px * var(--scale));
 }
 
-.grid {
+.row {
   display: grid;
   grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
 }
 
 button {
   aspect-ratio: 1 / 1;
   font-size: 1em;
-  border: 1px solid #333;
-  background: #f0f0f0;
-  cursor: pointer;
 }
 
-button.yellow { background: #ffd966; }
-button.red { background: #ff6666; }
-button.tab-used { background: #ffd966; }
-button.active-tab { outline: 3px solid #333; }
-
-.controls {
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
+/* 記録欄 */
+textarea {
+  width: 100%;
+  resize: none;
+  font-size: 1em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
+
+/* 色 */
+.tab-active { background: #2196f3; color: #fff; }
+.tab-used { background: #ffeb3b; }
+
+.btn-yellow { background: #ffeb3b; }
+.btn-red { background: #f44336; color: #fff; }
 </style>
 </head>
+
 <body>
 
-<div class="container">
+<!-- タブ -->
+<div class="row" id="tabs"></div>
 
-  <div id="record" class="record"></div>
+<!-- 記録 -->
+<textarea id="record" readonly></textarea>
 
-  <div id="tabs" class="grid"></div>
-
-  <div class="controls">
-    <button onclick="renameTab()">タブ名変更</button>
-    <button onclick="undo()">戻る</button>
-    <button onclick="copyRecord()">コピー</button>
-    <button onclick="addUnknown()">不明</button>
-    <button onclick="changeFont()">文字サイズ</button>
-    <button disabled></button><button disabled></button>
-    <button disabled></button><button disabled></button>
-    <button disabled></button>
-  </div>
-
-  <div id="numbers" class="grid"></div>
-
-</div>
+<!-- ボタン -->
+<div class="row" id="buttons"></div>
 
 <script>
-const recordDiv = document.getElementById("record");
-
-let tabs = Array.from({length:10}, (_,i)=>({
-  name: `${i+1}組`,
-  counts: {},
-  used: false
-}));
-
+/* ===== 状態 ===== */
+let tabs = Array.from({length:10}, (_,i)=>`${i+1}組`);
 let currentTab = 0;
-let recordText = "";
-let history = [];
-let fontState = 0;
 let lastInputTab = null;
 
-function snapshot() {
-  return {
-    recordText,
-    counts: JSON.parse(JSON.stringify(tabs.map(t=>t.counts))),
-    used: tabs.map(t=>t.used),
-    currentTab,
-    lastInputTab
-  };
-}
+let counts = Array.from({length:10}, ()=>Array(46).fill(0));
+let history = [];
 
-function restore(s) {
-  recordText = s.recordText;
-  tabs.forEach((t,i)=>{
-    t.counts = s.counts[i];
-    t.used = s.used[i];
+let snapshots = [];
+
+let fontIndex = 0;
+const fontScales = [1, 1.5, 2];
+
+/* ===== 描画 ===== */
+function renderTabs() {
+  const el = document.getElementById("tabs");
+  el.innerHTML = "";
+
+  tabs.forEach((name,i)=>{
+    const b = document.createElement("button");
+    b.textContent = name;
+
+    if (i === currentTab) {
+      b.classList.add("tab-active");
+    } else if (counts[i].some(v=>v>0)) {
+      b.classList.add("tab-used");
+    }
+
+    b.onclick = ()=>selectTab(i);
+    el.appendChild(b);
   });
-  currentTab = s.currentTab;
-  lastInputTab = s.lastInputTab;
 }
 
-function writeTabHeaderIfNeeded() {
-  if (lastInputTab === null) {
-    recordText += `${tabs[currentTab].name}: `;
-  } else if (lastInputTab !== currentTab) {
-    recordText += `\n${tabs[currentTab].name}: `;
+function renderButtons() {
+  const el = document.getElementById("buttons");
+  el.innerHTML = "";
+
+  for (let i=1;i<=45;i++) {
+    const b = document.createElement("button");
+    b.textContent = String(i).padStart(2,"0");
+
+    const c = counts[currentTab][i];
+    if (c === 1) b.classList.add("btn-yellow");
+    if (c >= 2) b.classList.add("btn-red");
+
+    b.onclick = ()=>pressNumber(i);
+    el.appendChild(b);
   }
+
+  addBtn("戻る", undo);
+  addBtn("不明", addUnknown);
+  addBtn("コピー", copyRecord);
+  addBtn("タブ名変更", renameTab);
+  addBtn("文字サイズ", changeFont);
 }
 
-function pressNumber(key) {
-  history.push(snapshot());
+function addBtn(label, fn) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = fn;
+  document.getElementById("buttons").appendChild(b);
+}
 
-  writeTabHeaderIfNeeded();
+function updateRecord() {
+  const r = document.getElementById("record");
+  r.value = history.join("");
+  r.style.height = "auto";
+  r.style.height = r.scrollHeight + "px";
+}
 
-  const tab = tabs[currentTab];
-  tab.used = true;
-  tab.counts[key] = (tab.counts[key]||0)+1;
+/* ===== 操作 ===== */
+function selectTab(i) {
+  currentTab = i;
+  renderTabs();
+  renderButtons();
+}
 
-  const c = tab.counts[key];
-  recordText += c >= 2 ? `${key}(${c}), ` : `${key}, `;
+function saveSnapshot() {
+  snapshots.push({
+    counts: JSON.parse(JSON.stringify(counts)),
+    history: [...history],
+    lastInputTab
+  });
+}
 
-  lastInputTab = currentTab;
-  render();
+function pressNumber(n) {
+  saveSnapshot();
+
+  if (lastInputTab !== currentTab) {
+    if (lastInputTab !== null) history.push("\n");
+    history.push(`${tabs[currentTab]}: `);
+    lastInputTab = currentTab;
+  }
+
+  counts[currentTab][n]++;
+  const c = counts[currentTab][n];
+
+  history.push(
+    c===1
+      ? `${String(n).padStart(2,"0")}, `
+      : `${String(n).padStart(2,"0")}(${c}), `
+  );
+
+  renderTabs();
+  renderButtons();
+  updateRecord();
 }
 
 function addUnknown() {
-  history.push(snapshot());
-  writeTabHeaderIfNeeded();
-  recordText += "?, ";
-  lastInputTab = currentTab;
-  render();
-}
+  saveSnapshot();
 
-function switchTab(i) {
-  if (i === currentTab) return;
-  currentTab = i;
-  render();
+  if (lastInputTab !== currentTab) {
+    if (lastInputTab !== null) history.push("\n");
+    history.push(`${tabs[currentTab]}: `);
+    lastInputTab = currentTab;
+  }
+
+  history.push("?, ");
+  renderTabs();
+  renderButtons();
+  updateRecord();
 }
 
 function undo() {
-  const last = history.pop();
-  if (!last) return;
-  restore(last);
-  render();
-}
+  if (!snapshots.length) return;
+  const s = snapshots.pop();
+  counts = JSON.parse(JSON.stringify(s.counts));
+  history = [...s.history];
+  lastInputTab = s.lastInputTab;
 
-function renameTab() {
-  const name = prompt("新しいタブ名（3文字以内）");
-  if (!name || name.length > 3) return;
-  tabs[currentTab].name = name;
-  render();
+  renderTabs();
+  renderButtons();
+  updateRecord();
 }
 
 function copyRecord() {
-  navigator.clipboard.writeText(recordText);
+  navigator.clipboard.writeText(document.getElementById("record").value);
 }
 
-function changeFont() {
-  fontState = (fontState + 1) % 3;
-  document.documentElement.style.setProperty(
-    "--base-font",
-    fontState === 0 ? "16px" :
-    fontState === 1 ? "24px" : "32px"
-  );
-}
-
-function renderTabs() {
-  const t = document.getElementById("tabs");
-  t.innerHTML = "";
-  tabs.forEach((tab,i)=>{
-    const b = document.createElement("button");
-    b.textContent = tab.name;
-    if (i === currentTab) b.classList.add("active-tab");
-    if (tab.used) b.classList.add("tab-used");
-    b.onclick = ()=>switchTab(i);
-    t.appendChild(b);
-  });
-}
-
-function renderNumbers() {
-  const n = document.getElementById("numbers");
-  n.innerHTML = "";
-  for (let i=1;i<=40;i++) {
-    const key = String(i).padStart(2,"0");
-    const b = document.createElement("button");
-    b.textContent = key;
-    const c = tabs[currentTab].counts[key] || 0;
-    if (c >= 2) b.classList.add("red");
-    else if (c === 1) b.classList.add("yellow");
-    b.onclick = ()=>pressNumber(key);
-    n.appendChild(b);
+function renameTab() {
+  const n = prompt("新しいタブ名（3文字まで）", tabs[currentTab]);
+  if (n && n.length<=3) {
+    tabs[currentTab] = n;
+    renderTabs();
   }
 }
 
-function render() {
-  renderTabs();
-  renderNumbers();
-  recordDiv.textContent = recordText;
+function changeFont() {
+  fontIndex = (fontIndex+1)%3;
+  document.documentElement.style.setProperty("--scale", fontScales[fontIndex]);
 }
 
-render();
+/* 初期化 */
+renderTabs();
+renderButtons();
 </script>
 
 </body>

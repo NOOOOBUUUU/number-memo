@@ -16,15 +16,26 @@ body {
   font-size: calc(16px * var(--scale));
 }
 
+/* 共通グリッド */
 .row {
   display: grid;
-  grid-template-columns: repeat(10, 1fr);
   gap: 4px;
   margin-bottom: 6px;
 }
 
+/* タブ */
+#tabs {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+/* 数字＋操作ボタン */
+#buttons {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+/* ボタン */
 button {
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 2 / 1;
   font-size: 1em;
 }
 
@@ -49,13 +60,8 @@ textarea {
 
 <body>
 
-<!-- タブ -->
 <div class="row" id="tabs"></div>
-
-<!-- 記録 -->
 <textarea id="record" readonly></textarea>
-
-<!-- ボタン -->
 <div class="row" id="buttons"></div>
 
 <script>
@@ -66,11 +72,36 @@ let lastInputTab = null;
 
 let counts = Array.from({length:10}, ()=>Array(46).fill(0));
 let history = [];
-
 let snapshots = [];
+
+let lineCount = 0; // ★ 1行の入力数
 
 let fontIndex = 0;
 const fontScales = [1, 1.5, 2];
+
+/* ===== 自動保存 ===== */
+function saveMain() {
+  localStorage.setItem("record_main", JSON.stringify({
+    tabs, counts, history, lastInputTab, lineCount
+  }));
+}
+
+function saveWithBackup() {
+  const current = localStorage.getItem("record_main");
+  if (current) localStorage.setItem("record_backup", current);
+  saveMain();
+}
+
+function restoreBackup() {
+  const b = localStorage.getItem("record_backup");
+  if (!b) {
+    alert("バックアップがありません");
+    return;
+  }
+  const d = JSON.parse(b);
+  ({ tabs, counts, history, lastInputTab, lineCount } = d);
+  renderAll();
+}
 
 /* ===== 描画 ===== */
 function renderTabs() {
@@ -81,11 +112,8 @@ function renderTabs() {
     const b = document.createElement("button");
     b.textContent = name;
 
-    if (i === currentTab) {
-      b.classList.add("tab-active");
-    } else if (counts[i].some(v=>v>0)) {
-      b.classList.add("tab-used");
-    }
+    if (i === currentTab) b.classList.add("tab-active");
+    else if (counts[i].some(v=>v>0)) b.classList.add("tab-used");
 
     b.onclick = ()=>selectTab(i);
     el.appendChild(b);
@@ -111,8 +139,10 @@ function renderButtons() {
   addBtn("戻る", undo);
   addBtn("不明", addUnknown);
   addBtn("コピー", copyRecord);
-  addBtn("タブ名変更", renameTab);
-  addBtn("文字サイズ", changeFont);
+  addBtn("復元", restoreBackup);
+  addBtn("クリア", clearRecord);
+  addBtn("タブ名", renameTab);
+  addBtn("文字", changeFont);
 }
 
 function addBtn(label, fn) {
@@ -130,27 +160,40 @@ function updateRecord() {
 }
 
 /* ===== 操作 ===== */
-function selectTab(i) {
-  currentTab = i;
+function renderAll() {
   renderTabs();
   renderButtons();
+  updateRecord();
+  saveMain();
+}
+
+function selectTab(i) {
+  currentTab = i;
+  renderAll();
 }
 
 function saveSnapshot() {
-  snapshots.push({
-    counts: JSON.parse(JSON.stringify(counts)),
-    history: [...history],
-    lastInputTab
-  });
+  snapshots.push(JSON.parse(JSON.stringify({
+    counts, history, lastInputTab, lineCount
+  })));
+}
+
+function newLineIfNeeded() {
+  if (lineCount >= 10) {
+    history.push("\n");
+    lineCount = 0;
+  }
 }
 
 function pressNumber(n) {
   saveSnapshot();
+  saveWithBackup();
 
   if (lastInputTab !== currentTab) {
     if (lastInputTab !== null) history.push("\n");
     history.push(`${tabs[currentTab]}: `);
     lastInputTab = currentTab;
+    lineCount = 0;
   }
 
   counts[currentTab][n]++;
@@ -162,36 +205,44 @@ function pressNumber(n) {
       : `${String(n).padStart(2,"0")}(${c}), `
   );
 
-  renderTabs();
-  renderButtons();
-  updateRecord();
+  lineCount++;
+  newLineIfNeeded();
+  renderAll();
 }
 
 function addUnknown() {
   saveSnapshot();
+  saveWithBackup();
 
   if (lastInputTab !== currentTab) {
     if (lastInputTab !== null) history.push("\n");
     history.push(`${tabs[currentTab]}: `);
     lastInputTab = currentTab;
+    lineCount = 0;
   }
 
   history.push("?, ");
-  renderTabs();
-  renderButtons();
-  updateRecord();
+  lineCount++;
+  newLineIfNeeded();
+  renderAll();
 }
 
 function undo() {
   if (!snapshots.length) return;
-  const s = snapshots.pop();
-  counts = JSON.parse(JSON.stringify(s.counts));
-  history = [...s.history];
-  lastInputTab = s.lastInputTab;
+  saveWithBackup();
 
-  renderTabs();
-  renderButtons();
-  updateRecord();
+  const s = snapshots.pop();
+  ({ counts, history, lastInputTab, lineCount } = s);
+  renderAll();
+}
+
+function clearRecord() {
+  saveWithBackup();
+  counts = Array.from({length:10}, ()=>Array(46).fill(0));
+  history = [];
+  lastInputTab = null;
+  lineCount = 0;
+  renderAll();
 }
 
 function copyRecord() {
@@ -201,8 +252,9 @@ function copyRecord() {
 function renameTab() {
   const n = prompt("新しいタブ名（3文字まで）", tabs[currentTab]);
   if (n && n.length<=3) {
+    saveWithBackup();
     tabs[currentTab] = n;
-    renderTabs();
+    renderAll();
   }
 }
 
@@ -211,9 +263,15 @@ function changeFont() {
   document.documentElement.style.setProperty("--scale", fontScales[fontIndex]);
 }
 
-/* 初期化 */
-renderTabs();
-renderButtons();
+/* ===== 起動時復元 ===== */
+window.addEventListener("load", ()=>{
+  const saved = localStorage.getItem("record_main");
+  if (saved) {
+    const d = JSON.parse(saved);
+    ({ tabs, counts, history, lastInputTab, lineCount } = d);
+  }
+  renderAll();
+});
 </script>
 
 </body>
